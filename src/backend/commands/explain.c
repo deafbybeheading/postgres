@@ -100,7 +100,7 @@ static void show_sortorder_options(StringInfo buf, Node *sortexpr,
 								   Oid sortOperator, Oid collation, bool nullsFirst);
 static void show_tablesample(TableSampleClause *tsc, PlanState *planstate,
 							 List *ancestors, ExplainState *es);
-static void show_sort_info(SortState *sortstate, ExplainState *es);
+static void show_sort_info(SortState *sortstate, StringInfo* worker_strs, ExplainState *es);
 static void show_hash_info(HashState *hashstate, ExplainState *es);
 static void show_tidbitmap_info(BitmapHeapScanState *planstate,
 								ExplainState *es);
@@ -289,6 +289,7 @@ NewExplainState(void)
 	es->costs = true;
 	/* Prepare output buffer. */
 	es->str = makeStringInfo();
+	es->root_str = es->str;
 
 	return es;
 }
@@ -1090,8 +1091,19 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	const char *partialmode = NULL;
 	const char *operation = NULL;
 	const char *custom_name = NULL;
+	StringInfo *worker_strs = NULL;
 	int			save_indent = es->indent;
 	bool		haschildren;
+
+	/* Prepare per-worker output */
+	if (es->analyze && planstate->worker_instrument) {
+		int num_workers = planstate->worker_instrument->num_workers;
+		int n;
+		worker_strs = (StringInfo *) palloc0(num_workers * sizeof(StringInfo));
+		for (n = 0; n < num_workers; n++) {
+			worker_strs[n] = makeStringInfo();
+		}
+	}
 
 	switch (nodeTag(plan))
 	{
@@ -1355,6 +1367,64 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		if (custom_name)
 			ExplainPropertyText("Custom Plan Provider", custom_name, es);
 		ExplainPropertyBool("Parallel Aware", plan->parallel_aware, es);
+	}
+
+	/* Prepare worker general execution details */
+	if (es->analyze && es->verbose && planstate->worker_instrument)
+	{
+		WorkerInstrumentation *w = planstate->worker_instrument;
+		int			n;
+
+		for (n = 0; n < w->num_workers; ++n)
+		{
+			Instrumentation *instrument = &w->instrument[n];
+			double		nloops = instrument->nloops;
+			double		startup_ms;
+			double		total_ms;
+			double		rows;
+
+			if (nloops <= 0)
+				continue;
+			startup_ms = 1000.0 * instrument->startup / nloops;
+			total_ms = 1000.0 * instrument->total / nloops;
+			rows = instrument->ntuples / nloops;
+
+			if (es->format == EXPLAIN_FORMAT_TEXT)
+			{
+				appendStringInfoSpaces(es->str, es->indent * 2);
+				appendStringInfo(es->str, "Worker %d: ", n);
+				if (es->timing)
+					appendStringInfo(es->str,
+									 "actual time=%.3f..%.3f rows=%.0f loops=%.0f\n",
+									 startup_ms, total_ms, rows, nloops);
+				else
+					appendStringInfo(es->str,
+									 "actual rows=%.0f loops=%.0f\n",
+									 rows, nloops);
+				es->indent++;
+				if (es->buffers)
+					show_buffer_usage(es, &instrument->bufusage);
+				es->indent--;
+			}
+			else
+			{
+				ExplainOpenWorker(worker_strs[n], es);
+
+				if (es->timing)
+				{
+					ExplainPropertyFloat("Actual Startup Time", "ms",
+										 startup_ms, 3, es);
+					ExplainPropertyFloat("Actual Total Time", "ms",
+										 total_ms, 3, es);
+				}
+				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+			}
+		}
+
+		if (es->format != EXPLAIN_FORMAT_TEXT) {
+			ExplainCloseWorker(es);
+		}
 	}
 
 	switch (nodeTag(plan))
@@ -1856,7 +1926,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		case T_Sort:
 			show_sort_keys(castNode(SortState, planstate), ancestors, es);
-			show_sort_info(castNode(SortState, planstate), es);
+			show_sort_info(castNode(SortState, planstate), worker_strs, es);
 			break;
 		case T_MergeAppend:
 			show_merge_append_keys(castNode(MergeAppendState, planstate),
@@ -1885,74 +1955,30 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	if (es->buffers && planstate->instrument)
 		show_buffer_usage(es, &planstate->instrument->bufusage);
 
-	/* Show worker detail */
-	if (es->analyze && es->verbose && !es->hide_workers &&
-		planstate->worker_instrument)
+	/* Prepare worker buffer usage */
+	if (es->buffers && es->analyze && es->verbose && !es->hide_workers
+		&& planstate->worker_instrument && es->format != EXPLAIN_FORMAT_TEXT)
 	{
 		WorkerInstrumentation *w = planstate->worker_instrument;
-		bool		opened_group = false;
 		int			n;
 
 		for (n = 0; n < w->num_workers; ++n)
 		{
 			Instrumentation *instrument = &w->instrument[n];
 			double		nloops = instrument->nloops;
-			double		startup_ms;
-			double		total_ms;
-			double		rows;
 
 			if (nloops <= 0)
 				continue;
-			startup_ms = 1000.0 * instrument->startup / nloops;
-			total_ms = 1000.0 * instrument->total / nloops;
-			rows = instrument->ntuples / nloops;
 
-			if (es->format == EXPLAIN_FORMAT_TEXT)
-			{
-				appendStringInfoSpaces(es->str, es->indent * 2);
-				appendStringInfo(es->str, "Worker %d: ", n);
-				if (es->timing)
-					appendStringInfo(es->str,
-									 "actual time=%.3f..%.3f rows=%.0f loops=%.0f\n",
-									 startup_ms, total_ms, rows, nloops);
-				else
-					appendStringInfo(es->str,
-									 "actual rows=%.0f loops=%.0f\n",
-									 rows, nloops);
-				es->indent++;
-				if (es->buffers)
-					show_buffer_usage(es, &instrument->bufusage);
-				es->indent--;
-			}
-			else
-			{
-				if (!opened_group)
-				{
-					ExplainOpenGroup("Workers", "Workers", false, es);
-					opened_group = true;
-				}
-				ExplainOpenGroup("Worker", NULL, true, es);
-				ExplainPropertyInteger("Worker Number", NULL, n, es);
-
-				if (es->timing)
-				{
-					ExplainPropertyFloat("Actual Startup Time", "ms",
-										 startup_ms, 3, es);
-					ExplainPropertyFloat("Actual Total Time", "ms",
-										 total_ms, 3, es);
-				}
-				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
-				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
-
-				if (es->buffers)
-					show_buffer_usage(es, &instrument->bufusage);
-
-				ExplainCloseGroup("Worker", NULL, true, es);
-			}
+			ExplainOpenWorker(worker_strs[n], es);
+			show_buffer_usage(es, &instrument->bufusage);
 		}
+		ExplainCloseWorker(es);
+	}
 
-		if (opened_group)
-			ExplainCloseGroup("Workers", "Workers", false, es);
+	/* Show worker detail */
+	if (planstate->worker_instrument) {
+		ExplainFlushWorkers(worker_strs, planstate->worker_instrument->num_workers, es);
 	}
 
 	/* Get ready to display the child plans */
@@ -2552,7 +2578,7 @@ show_tablesample(TableSampleClause *tsc, PlanState *planstate,
  * If it's EXPLAIN ANALYZE, show tuplesort stats for a sort node
  */
 static void
-show_sort_info(SortState *sortstate, ExplainState *es)
+show_sort_info(SortState *sortstate, StringInfo *worker_strs, ExplainState *es)
 {
 	if (!es->analyze)
 		return;
@@ -2593,7 +2619,6 @@ show_sort_info(SortState *sortstate, ExplainState *es)
 	if (sortstate->shared_info != NULL)
 	{
 		int			n;
-		bool		opened_group = false;
 
 		for (n = 0; n < sortstate->shared_info->num_workers; n++)
 		{
@@ -2620,21 +2645,15 @@ show_sort_info(SortState *sortstate, ExplainState *es)
 			}
 			else
 			{
-				if (!opened_group)
-				{
-					ExplainOpenGroup("Workers", "Workers", false, es);
-					opened_group = true;
-				}
-				ExplainOpenGroup("Worker", NULL, true, es);
-				ExplainPropertyInteger("Worker Number", NULL, n, es);
+				ExplainOpenWorker(worker_strs[n], es);
 				ExplainPropertyText("Sort Method", sortMethod, es);
 				ExplainPropertyInteger("Sort Space Used", "kB", spaceUsed, es);
 				ExplainPropertyText("Sort Space Type", spaceType, es);
-				ExplainCloseGroup("Worker", NULL, true, es);
 			}
 		}
-		if (opened_group)
-			ExplainCloseGroup("Workers", "Workers", false, es);
+		if (es->format != EXPLAIN_FORMAT_TEXT) {
+			ExplainCloseWorker(es);
+		}
 	}
 }
 
@@ -3749,6 +3768,62 @@ ExplainCloseGroup(const char *objtype, const char *labelname,
 			es->grouping_stack = list_delete_first(es->grouping_stack);
 			break;
 	}
+}
+
+/*
+ * Begin output for a specific worker. If we are currently producing output
+ * for another worker, close that worker automatically.
+ */
+void
+ExplainOpenWorker(StringInfo worker_str, ExplainState *es)
+{
+	/*
+	 * We indent twice--once for the "Worker" group and once for the "Workers"
+	 * group--but only need to adjust indentation once for each string of
+	 * ExplainOpenWorker calls.
+	 */
+	if (es->str == es->root_str) {
+		es->indent += 2;
+	}
+
+	es->print_workers = true;
+	es->str = worker_str;
+}
+
+/*
+ * Explicitly end output for the current worker and resume output
+ * for the root of the node.
+ */
+void
+ExplainCloseWorker(ExplainState *es)
+{
+	es->indent -= 2;
+	es->str = es->root_str;
+}
+
+/*
+ * Flush output registered so far to the output buffer and deallocate
+ * mechanism for writing to workers.
+ */
+void
+ExplainFlushWorkers(StringInfo* worker_strs, int num_workers, ExplainState *es)
+{
+	int i;
+
+	if (!es->print_workers) {
+		return;
+	}
+
+	ExplainOpenGroup("Workers", "Workers", false, es);
+	for (i = 0; i < num_workers; i++) {
+		ExplainOpenGroup("Worker", NULL, true, es);
+		ExplainPropertyInteger("Worker Number", NULL, i, es);
+		appendStringInfoString(es->str, worker_strs[i]->data);
+		ExplainCloseGroup("Worker", NULL, true, es);
+	}
+	ExplainCloseGroup("Workers", "Workers", false, es);
+	// do we have any other cleanup to do?
+	es->print_workers = false;
 }
 
 /*
