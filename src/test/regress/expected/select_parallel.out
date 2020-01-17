@@ -591,10 +591,10 @@ select * from explain_parallel_sort_stats();
          ->  Sort (actual rows=2000 loops=15)
                Sort Key: tenk1.ten
                Sort Method: quicksort  Memory: xxx
-               Worker 0:  Sort Method: quicksort  Memory: xxx
-               Worker 1:  Sort Method: quicksort  Memory: xxx
-               Worker 2:  Sort Method: quicksort  Memory: xxx
-               Worker 3:  Sort Method: quicksort  Memory: xxx
+               Worker 0: Sort Method: quicksort  Memory: xxx
+               Worker 1: Sort Method: quicksort  Memory: xxx
+               Worker 2: Sort Method: quicksort  Memory: xxx
+               Worker 3: Sort Method: quicksort  Memory: xxx
                ->  Parallel Seq Scan on tenk1 (actual rows=2000 loops=15)
                      Filter: (ten < 100)
 (14 rows)

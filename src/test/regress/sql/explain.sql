@@ -2,7 +2,7 @@
 -- EXPLAIN
 --
 
--- helper functions for examining json explain output
+-- helper functions for examining explain output
 
 -- return a json explain of given query
 CREATE OR REPLACE FUNCTION json_explain(query text, variadic opts text[])
@@ -14,6 +14,22 @@ BEGIN
   RETURN plan;
 END;
 $$;
+
+-- return a text explain of given query
+CREATE OR REPLACE FUNCTION text_explain(query text, variadic opts text[])
+  RETURNS text LANGUAGE PLPGSQL AS $$
+DECLARE
+  plan_row RECORD;
+  plan text = '';
+BEGIN
+  FOR plan_row IN EXECUTE 'EXPLAIN (' || array_to_string(array_append(opts, 'FORMAT TEXT) '), ', ') || query LOOP
+    plan = plan || plan_row."QUERY PLAN" || E'\n';
+  END LOOP;
+
+  RETURN plan;
+END;
+$$;
+
 
 /*
  * Takes a json object and processes its keys and values. For every
@@ -73,5 +89,10 @@ set force_parallel_mode = true;
 SELECT explain_workers(json_explain($$
   SELECT * FROM (VALUES(1),(2)) x ORDER BY x;
 $$, 'verbose', 'analyze', 'buffers') -> 0 -> 'Plan');
+
+SELECT regexp_replace(regexp_replace(text_explain($$
+  SELECT * FROM (VALUES(1),(2)) x ORDER BY x;
+$$, 'verbose', 'analyze', 'buffers', 'timing off', 'costs off', 'summary off'),
+  'Buffers: .+?$', 'Buffers: xxx', 'n'), 'Sort Method: .+?$', 'Sort Method: xxx', 'n');
 
 reset force_parallel_mode;
