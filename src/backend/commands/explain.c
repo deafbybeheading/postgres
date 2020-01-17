@@ -1389,10 +1389,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			total_ms = 1000.0 * instrument->total / nloops;
 			rows = instrument->ntuples / nloops;
 
+			ExplainOpenWorker(worker_strs[n], es);
+
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 			{
-				appendStringInfoSpaces(es->str, es->indent * 2);
-				appendStringInfo(es->str, "Worker %d: ", n);
 				if (es->timing)
 					appendStringInfo(es->str,
 									 "actual time=%.3f..%.3f rows=%.0f loops=%.0f\n",
@@ -1401,15 +1401,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					appendStringInfo(es->str,
 									 "actual rows=%.0f loops=%.0f\n",
 									 rows, nloops);
-				es->indent++;
 				if (es->buffers)
 					show_buffer_usage(es, &instrument->bufusage);
-				es->indent--;
 			}
 			else
 			{
-				ExplainOpenWorker(worker_strs[n], es);
-
 				if (es->timing)
 				{
 					ExplainPropertyFloat("Actual Startup Time", "ms",
@@ -1422,9 +1418,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			}
 		}
 
-		if (es->format != EXPLAIN_FORMAT_TEXT) {
-			ExplainCloseWorker(es);
-		}
+		ExplainCloseWorker(es);
 	}
 
 	switch (nodeTag(plan))
@@ -2619,6 +2613,7 @@ show_sort_info(SortState *sortstate, StringInfo *worker_strs, ExplainState *es)
 	if (sortstate->shared_info != NULL)
 	{
 		int			n;
+		bool 		indent = es->print_workers;
 
 		for (n = 0; n < sortstate->shared_info->num_workers; n++)
 		{
@@ -2634,26 +2629,26 @@ show_sort_info(SortState *sortstate, StringInfo *worker_strs, ExplainState *es)
 			spaceType = tuplesort_space_type_name(sinstrument->spaceType);
 			spaceUsed = sinstrument->spaceUsed;
 
+			ExplainOpenWorker(worker_strs[n], es);
+
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 			{
-				appendStringInfoSpaces(es->str, es->indent * 2);
-				if (n > 0 || !es->hide_workers)
-					appendStringInfo(es->str, "Worker %d:  ", n);
+				if (indent)
+				{
+					appendStringInfoSpaces(es->str, es->indent * 2);
+				}
 				appendStringInfo(es->str,
 								 "Sort Method: %s  %s: %ldkB\n",
 								 sortMethod, spaceType, spaceUsed);
 			}
 			else
 			{
-				ExplainOpenWorker(worker_strs[n], es);
 				ExplainPropertyText("Sort Method", sortMethod, es);
 				ExplainPropertyInteger("Sort Space Used", "kB", spaceUsed, es);
 				ExplainPropertyText("Sort Space Type", spaceType, es);
 			}
 		}
-		if (es->format != EXPLAIN_FORMAT_TEXT) {
-			ExplainCloseWorker(es);
-		}
+		ExplainCloseWorker(es);
 	}
 }
 
@@ -3778,12 +3773,14 @@ void
 ExplainOpenWorker(StringInfo worker_str, ExplainState *es)
 {
 	/*
-	 * We indent twice--once for the "Worker" group and once for the "Workers"
-	 * group--but only need to adjust indentation once for each string of
-	 * ExplainOpenWorker calls.
+	 * For structured formats, we indent twice--once for the "Worker" group
+	 * and once for the "Workers" group--but only need to adjust indentation
+	 * once for each string of ExplainOpenWorker calls. For text format, we
+	 * just indent once, to add worker info on the next worker line.
 	 */
-	if (es->str == es->root_str) {
-		es->indent += 2;
+	if (es->str == es->root_str)
+	{
+		es->indent += es->format == EXPLAIN_FORMAT_TEXT ? 1 : 2;
 	}
 
 	es->print_workers = true;
@@ -3797,7 +3794,9 @@ ExplainOpenWorker(StringInfo worker_str, ExplainState *es)
 void
 ExplainCloseWorker(ExplainState *es)
 {
-	es->indent -= 2;
+	/* as above, the text format has different indentation */
+	es->indent -= es->format == EXPLAIN_FORMAT_TEXT ? 1 : 2;
+
 	es->str = es->root_str;
 }
 
@@ -3817,7 +3816,16 @@ ExplainFlushWorkers(StringInfo* worker_strs, int num_workers, ExplainState *es)
 	ExplainOpenGroup("Workers", "Workers", false, es);
 	for (i = 0; i < num_workers; i++) {
 		ExplainOpenGroup("Worker", NULL, true, es);
-		ExplainPropertyInteger("Worker Number", NULL, i, es);
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			appendStringInfoSpaces(es->str, es->indent * 2);
+			appendStringInfo(es->str, "Worker %d: ", i);
+		}
+		else
+		{
+			ExplainPropertyInteger("Worker Number", NULL, i, es);
+		}
+
 		appendStringInfoString(es->str, worker_strs[i]->data);
 		ExplainCloseGroup("Worker", NULL, true, es);
 	}
