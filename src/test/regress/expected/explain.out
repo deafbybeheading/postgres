@@ -1,7 +1,7 @@
 --
 -- EXPLAIN
 --
--- helper functions for examining json explain output
+-- helper functions for examining explain output
 -- return a json explain of given query
 CREATE OR REPLACE FUNCTION json_explain(query text, variadic opts text[])
   RETURNS json LANGUAGE PLPGSQL AS $$
@@ -9,6 +9,20 @@ DECLARE
   plan json;
 BEGIN
   EXECUTE 'EXPLAIN (' || array_to_string(array_append(opts, 'FORMAT JSON) '), ', ') || query INTO STRICT plan;
+  RETURN plan;
+END;
+$$;
+-- return a text explain of given query
+CREATE OR REPLACE FUNCTION text_explain(query text, variadic opts text[])
+  RETURNS text LANGUAGE PLPGSQL AS $$
+DECLARE
+  plan_row RECORD;
+  plan text = '';
+BEGIN
+  FOR plan_row IN EXECUTE 'EXPLAIN (' || array_to_string(array_append(opts, 'FORMAT TEXT) '), ', ') || query LOOP
+    plan = plan || plan_row."QUERY PLAN" || E'\n';
+  END LOOP;
+
   RETURN plan;
 END;
 $$;
@@ -70,6 +84,31 @@ $$, 'verbose', 'analyze', 'buffers') -> 0 -> 'Plan');
                                                                                                                                                                                                                                                                                                                                                                                                                                                               explain_workers                                                                                                                                                                                                                                                                                                                                                                                                                                                               
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  { "Plans" : [{ "Workers" : [{ "Worker Number" : 0, "Actual Startup Time" : 0, "Actual Total Time" : 0, "Actual Rows" : 2, "Actual Loops" : 1, "Sort Method" : "quicksort", "Sort Space Used" : 0, "Sort Space Type" : "Memory", "Shared Hit Blocks" : 0, "Shared Read Blocks" : 0, "Shared Dirtied Blocks" : 0, "Shared Written Blocks" : 0, "Local Hit Blocks" : 0, "Local Read Blocks" : 0, "Local Dirtied Blocks" : 0, "Local Written Blocks" : 0, "Temp Read Blocks" : 0, "Temp Written Blocks" : 0 }], "Plans" : [{ "Workers" : [{ "Worker Number" : 0, "Actual Startup Time" : 0, "Actual Total Time" : 0, "Actual Rows" : 2, "Actual Loops" : 1, "Shared Hit Blocks" : 0, "Shared Read Blocks" : 0, "Shared Dirtied Blocks" : 0, "Shared Written Blocks" : 0, "Local Hit Blocks" : 0, "Local Read Blocks" : 0, "Local Dirtied Blocks" : 0, "Local Written Blocks" : 0, "Temp Read Blocks" : 0, "Temp Written Blocks" : 0 }] }] }] }
+(1 row)
+
+SELECT regexp_replace(regexp_replace(text_explain($$
+  SELECT * FROM (VALUES(1),(2)) x ORDER BY x;
+$$, 'verbose', 'analyze', 'buffers', 'timing off', 'costs off', 'summary off'),
+  'Buffers: .+?$', 'Buffers: xxx', 'n'), 'Sort Method: .+?$', 'Sort Method: xxx', 'n');
+                          regexp_replace                           
+-------------------------------------------------------------------
+ Gather (actual rows=2 loops=1)                                   +
+   Output: "*VALUES*".column1, (ROW("*VALUES*".column1))          +
+   Workers Planned: 1                                             +
+   Workers Launched: 1                                            +
+   Single Copy: true                                              +
+   Buffers: xxx                                                   +
+   ->  Sort (actual rows=2 loops=1)                               +
+         Output: "*VALUES*".column1, (ROW("*VALUES*".column1))    +
+         Sort Key: (ROW("*VALUES*".column1))                      +
+         Buffers: shared hit=114                                  +
+         Worker 0: actual rows=2 loops=1                          +
+           Buffers: shared hit=114                                +
+           Sort Method: xxx                                       +
+         ->  Values Scan on "*VALUES*" (actual rows=2 loops=1)    +
+               Output: "*VALUES*".column1, ROW("*VALUES*".column1)+
+               Worker 0: actual rows=2 loops=1                    +
+ 
 (1 row)
 
 reset force_parallel_mode;
