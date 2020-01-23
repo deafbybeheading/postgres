@@ -3813,9 +3813,7 @@ ExplainFlushWorkers(StringInfo* worker_strs, int num_workers, ExplainState *es)
 			appendStringInfo(es->str, "Worker %d: ", i);
 		}
 		else
-		{
 			ExplainPropertyInteger("Worker Number", NULL, i, es);
-		}
 
 		appendStringInfoString(es->str, worker_strs[i]->data);
 		ExplainCloseGroup("Worker", NULL, true, es);
