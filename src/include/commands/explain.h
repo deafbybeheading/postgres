@@ -40,7 +40,7 @@ typedef struct ExplainState
 	/* state for output formatting --- not reset for each new plan tree */
 	int			indent;			/* current indentation level */
 	List	   *grouping_stack; /* format-specific grouping state */
-	bool        print_workers;  /* whether current node has worker metadata */
+	bool	    has_worker_output;	/* whether current node has worker metadata */
 	StringInfo	root_str;		/* root output buffer */
 	/* state related to the current plan tree (filled by ExplainPrintPlan) */
 	PlannedStmt *pstmt;			/* top of plan */
@@ -112,10 +112,5 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 							 bool labeled, ExplainState *es);
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
-
-extern void ExplainOpenWorker(StringInfo worker_str, ExplainState *es);
-extern void ExplainCloseWorker(ExplainState *es);
-extern void ExplainFlushWorkers(StringInfo *worker_strs, int num_workers, ExplainState *es);
-
 
 #endif							/* EXPLAIN_H */
