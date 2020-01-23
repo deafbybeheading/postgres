@@ -3795,8 +3795,7 @@ ExplainCloseWorker(ExplainState *es)
 }
 
 /*
- * Flush output registered so far to the output buffer and deallocate
- * mechanism for writing to workers.
+ * Flush worker output for this node and reset the worker output state.
  */
 static void
 ExplainFlushWorkers(StringInfo* worker_strs, int num_workers, ExplainState *es)
