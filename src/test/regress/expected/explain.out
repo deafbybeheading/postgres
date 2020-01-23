@@ -103,8 +103,8 @@ $$, 'verbose', 'analyze', 'buffers', 'timing off', 'costs off', 'summary off'),
          Sort Key: (ROW("*VALUES*".column1))                      +
          Buffers: shared hit=114                                  +
          Worker 0: actual rows=2 loops=1                          +
-           Buffers: shared hit=114                                +
            Sort Method: xxx                                       +
+           Buffers: shared hit=114                                +
          ->  Values Scan on "*VALUES*" (actual rows=2 loops=1)    +
                Output: "*VALUES*".column1, ROW("*VALUES*".column1)+
                Worker 0: actual rows=2 loops=1                    +
