@@ -1401,8 +1401,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					appendStringInfo(es->str,
 									 "actual rows=%.0f loops=%.0f\n",
 									 rows, nloops);
-				if (es->buffers)
-					show_buffer_usage(es, &instrument->bufusage);
 			}
 			else
 			{
@@ -1951,7 +1949,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 
 	/* Prepare worker buffer usage */
 	if (es->buffers && es->analyze && es->verbose && !es->hide_workers
-		&& planstate->worker_instrument && es->format != EXPLAIN_FORMAT_TEXT)
+		&& planstate->worker_instrument)
 	{
 		WorkerInstrumentation *w = planstate->worker_instrument;
 		int			n;
