@@ -131,7 +131,9 @@ static void ExplainXMLTag(const char *tagname, int flags, ExplainState *es);
 static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
-
+static void ExplainOpenWorker(StringInfo worker_str, ExplainState *es);
+static void ExplainCloseWorker(ExplainState *es);
+static void ExplainFlushWorkers(StringInfo *worker_strs, int num_workers, ExplainState *es);
 
 
 /*
@@ -1096,13 +1098,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	bool		haschildren;
 
 	/* Prepare per-worker output */
-	if (es->analyze && planstate->worker_instrument) {
+	if (es->analyze && planstate->worker_instrument)
+	{
 		int num_workers = planstate->worker_instrument->num_workers;
-		int n;
 		worker_strs = (StringInfo *) palloc0(num_workers * sizeof(StringInfo));
-		for (n = 0; n < num_workers; n++) {
+		for (int n = 0; n < num_workers; n++)
 			worker_strs[n] = makeStringInfo();
-		}
 	}
 
 	switch (nodeTag(plan))
@@ -1370,12 +1371,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	}
 
 	/* Prepare worker general execution details */
-	if (es->analyze && es->verbose && planstate->worker_instrument)
+	if (es->analyze && es->verbose && !es->hide_workers && planstate->worker_instrument)
 	{
 		WorkerInstrumentation *w = planstate->worker_instrument;
-		int			n;
 
-		for (n = 0; n < w->num_workers; ++n)
+		for (int n = 0; n < w->num_workers; ++n)
 		{
 			Instrumentation *instrument = &w->instrument[n];
 			double		nloops = instrument->nloops;
@@ -1971,9 +1971,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	}
 
 	/* Show worker detail */
-	if (planstate->worker_instrument) {
+	if (planstate->worker_instrument)
 		ExplainFlushWorkers(worker_strs, planstate->worker_instrument->num_workers, es);
-	}
 
 	/* Get ready to display the child plans */
 	haschildren = planstate->initPlan ||
@@ -2613,7 +2612,7 @@ show_sort_info(SortState *sortstate, StringInfo *worker_strs, ExplainState *es)
 	if (sortstate->shared_info != NULL)
 	{
 		int			n;
-		bool 		indent = es->print_workers;
+		bool 		indent = es->has_worker_output;
 
 		for (n = 0; n < sortstate->shared_info->num_workers; n++)
 		{
@@ -2634,9 +2633,7 @@ show_sort_info(SortState *sortstate, StringInfo *worker_strs, ExplainState *es)
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 			{
 				if (indent)
-				{
 					appendStringInfoSpaces(es->str, es->indent * 2);
-				}
 				appendStringInfo(es->str,
 								 "Sort Method: %s  %s: %ldkB\n",
 								 sortMethod, spaceType, spaceUsed);
@@ -3769,21 +3766,20 @@ ExplainCloseGroup(const char *objtype, const char *labelname,
  * Begin output for a specific worker. If we are currently producing output
  * for another worker, close that worker automatically.
  */
-void
+static void
 ExplainOpenWorker(StringInfo worker_str, ExplainState *es)
 {
 	/*
-	 * For structured formats, we indent twice--once for the "Worker" group
-	 * and once for the "Workers" group--but only need to adjust indentation
-	 * once for each string of ExplainOpenWorker calls. For text format, we
-	 * just indent once, to add worker info on the next worker line.
+	 * For structured formats, we indent twice: once for the "Worker" group
+	 * itself and once for the surrounding "Workers" group. For text format,
+	 * we just indent once, to add worker info on the next worker line. Either
+	 * way, we only need to adjust indentation once for each string of
+	 * ExplainOpenWorker calls.
 	 */
 	if (es->str == es->root_str)
-	{
 		es->indent += es->format == EXPLAIN_FORMAT_TEXT ? 1 : 2;
-	}
 
-	es->print_workers = true;
+	es->has_worker_output = true;
 	es->str = worker_str;
 }
 
@@ -3791,7 +3787,7 @@ ExplainOpenWorker(StringInfo worker_str, ExplainState *es)
  * Explicitly end output for the current worker and resume output
  * for the root of the node.
  */
-void
+static void
 ExplainCloseWorker(ExplainState *es)
 {
 	/* as above, the text format has different indentation */
@@ -3804,17 +3800,15 @@ ExplainCloseWorker(ExplainState *es)
  * Flush output registered so far to the output buffer and deallocate
  * mechanism for writing to workers.
  */
-void
+static void
 ExplainFlushWorkers(StringInfo* worker_strs, int num_workers, ExplainState *es)
 {
-	int i;
-
-	if (!es->print_workers) {
+	if (!es->has_worker_output)
 		return;
-	}
 
 	ExplainOpenGroup("Workers", "Workers", false, es);
-	for (i = 0; i < num_workers; i++) {
+	for (int i = 0; i < num_workers; i++)
+	{
 		ExplainOpenGroup("Worker", NULL, true, es);
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
@@ -3830,8 +3824,7 @@ ExplainFlushWorkers(StringInfo* worker_strs, int num_workers, ExplainState *es)
 		ExplainCloseGroup("Worker", NULL, true, es);
 	}
 	ExplainCloseGroup("Workers", "Workers", false, es);
-	// do we have any other cleanup to do?
-	es->print_workers = false;
+	es->has_worker_output = false;
 }
 
 /*
