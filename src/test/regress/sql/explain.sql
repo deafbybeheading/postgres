@@ -93,6 +93,6 @@ $$, 'verbose', 'analyze', 'buffers') -> 0 -> 'Plan');
 SELECT regexp_replace(regexp_replace(text_explain($$
   SELECT * FROM (VALUES(1),(2)) x ORDER BY x;
 $$, 'verbose', 'analyze', 'buffers', 'timing off', 'costs off', 'summary off'),
-  'Buffers: .+?$', 'Buffers: xxx', 'n'), 'Sort Method: .+?$', 'Sort Method: xxx', 'n');
+  'Buffers:.+$', 'Buffers: xxx', 'ng'), 'Sort Method:.+$', 'Sort Method: xxx', 'ng');
 
 reset force_parallel_mode;
